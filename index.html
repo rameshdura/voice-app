@@ -83,6 +83,8 @@
       <option value="jf_alpha">Japanese — Alpha (female)</option>
       <option value="jf_gongitsune">Japanese — Gongitsune (female)</option>
       <option value="jm_kumo">Japanese — Kumo (male)</option>
+      <option value="piper-nep-google">Nepali — Piper (Google voice)</option>
+      <option value="piper-nep-chitwan">Nepali — Piper (Chitwan voice)</option>
     </select>
     <div class="row" style="margin-top:16px">
       <button class="action" id="speakBtn">Speak</button>
@@ -163,17 +165,20 @@ $('speakBtn').onclick = async () => {
   if (!key()) { $('ttsStatus').textContent = 'Enter the API key first.'; return; }
   const btn = $('speakBtn'); btn.disabled = true;
   $('ttsStatus').textContent = 'Generating speech…';
+  const nepali = $('voice').value.startsWith('piper-nep');
   try {
-    const r = await fetch('/api/v1/audio/speech', {
+    const r = await fetch(nepali ? '/api-ne/v1/audio/speech' : '/api/v1/audio/speech', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + key(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'speaches-ai/Kokoro-82M-v1.0-ONNX', input: text, voice: $('voice').value, response_format: 'mp3' })
+      body: JSON.stringify(nepali
+        ? { model: 'piper-nepali', input: text, voice: $('voice').value, response_format: 'wav' }
+        : { model: 'speaches-ai/Kokoro-82M-v1.0-ONNX', input: text, voice: $('voice').value, response_format: 'mp3' })
     });
     if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || ('HTTP ' + r.status)); }
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
     const p = $('player'); p.src = url; p.style.display = ''; p.play();
-    const dl = $('dlLink'); dl.href = url; dl.style.display = '';
+    const dl = $('dlLink'); dl.href = url; dl.download = nepali ? 'speech.wav' : 'speech.mp3'; dl.textContent = nepali ? 'Download WAV' : 'Download MP3'; dl.style.display = '';
     $('ttsStatus').textContent = 'Done.';
   } catch (e) {
     $('ttsStatus').textContent = 'Error: ' + e.message;
