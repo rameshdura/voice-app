@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voice Studio — Speech to Text & Text to Speech</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, "Hiragino Sans", sans-serif; background: #0e1116; color: #e8ecf1; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 28px 18px 60px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: #9aa7b4; margin: 0 0 22px; font-size: 14px; }
+  .keybar { display: flex; gap: 8px; margin-bottom: 20px; }
+  .keybar input { flex: 1; }
+  input, textarea, select { width: 100%; background: #171c24; border: 1px solid #2a323f; color: #e8ecf1; border-radius: 10px; padding: 11px 12px; font-size: 15px; }
+  textarea { min-height: 110px; resize: vertical; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .tab { flex: 1; padding: 12px; border-radius: 10px; border: 1px solid #2a323f; background: #171c24; color: #9aa7b4; font-size: 15px; cursor: pointer; }
+  .tab.active { background: #f5c518; color: #111; border-color: #f5c518; font-weight: 700; }
+  .card { background: #141922; border: 1px solid #232b38; border-radius: 14px; padding: 18px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button.action { background: #f5c518; color: #111; border: 0; border-radius: 10px; padding: 12px 18px; font-size: 15px; font-weight: 700; cursor: pointer; }
+  button.ghost { background: #1d242f; color: #e8ecf1; border: 1px solid #2a323f; border-radius: 10px; padding: 12px 16px; font-size: 15px; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: wait; }
+  .status { color: #9aa7b4; font-size: 13px; min-height: 18px; margin-top: 10px; }
+  .result { white-space: pre-wrap; background: #0e1116; border: 1px solid #232b38; border-radius: 10px; padding: 14px; min-height: 60px; font-size: 15px; line-height: 1.55; }
+  label { display: block; font-size: 13px; color: #9aa7b4; margin: 14px 0 6px; }
+  label:first-child { margin-top: 0; }
+  audio { width: 100%; margin-top: 12px; }
+  .rec { background: #c0392b !important; color: #fff !important; }
+  .hint { font-size: 12px; color: #6b7787; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎙️ Voice Studio</h1>
+  <p class="sub">Speech-to-text and text-to-speech, powered by my own voice server (Whisper large-v3 + Kokoro).</p>
+
+  <div class="keybar">
+    <input id="apiKey" type="password" placeholder="API key (saved only in this browser)">
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" id="tabStt">📝 Transcribe</button>
+    <button class="tab" id="tabTts">🔊 Speak</button>
+  </div>
+
+  <div class="card" id="panelStt">
+    <label>Record</label>
+    <div class="row">
+      <button class="action" id="recBtn">● Start recording</button>
+      <span class="status" id="recStatus"></span>
+    </div>
+    <label>…or upload an audio file</label>
+    <input id="fileInput" type="file" accept="audio/*">
+    <label>Language</label>
+    <select id="lang">
+      <option value="">Auto-detect</option>
+      <option value="ja">Japanese</option>
+      <option value="en">English</option>
+      <option value="ne">Nepali</option>
+    </select>
+    <div class="row" style="margin-top:16px">
+      <button class="action" id="transcribeBtn">Transcribe</button>
+      <button class="ghost" id="copyBtn">Copy text</button>
+    </div>
+    <p class="status" id="sttStatus"></p>
+    <div class="result" id="sttResult">Your transcript will appear here.</div>
+    <p class="hint">Tip: the first transcription after the server has been idle takes longer (the model loads). Keep clips short — the web proxy has a time limit.</p>
+  </div>
+
+  <div class="card" id="panelTts" style="display:none">
+    <label>Text to speak</label>
+    <textarea id="ttsText" placeholder="Type or paste text here…"></textarea>
+    <label>Voice</label>
+    <select id="voice">
+      <option value="af_heart">English — Heart (female)</option>
+      <option value="af_bella">English — Bella (female)</option>
+      <option value="am_michael">English — Michael (male)</option>
+      <option value="am_puck">English — Puck (male)</option>
+      <option value="bf_emma">British English — Emma (female)</option>
+      <option value="jf_alpha">Japanese — Alpha (female)</option>
+      <option value="jf_gongitsune">Japanese — Gongitsune (female)</option>
+      <option value="jm_kumo">Japanese — Kumo (male)</option>
+    </select>
+    <div class="row" style="margin-top:16px">
+      <button class="action" id="speakBtn">Speak</button>
+      <a id="dlLink" class="ghost" style="display:none; text-decoration:none" download="speech.mp3">Download MP3</a>
+    </div>
+    <p class="status" id="ttsStatus"></p>
+    <audio id="player" controls style="display:none"></audio>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const keyInput = $('apiKey');
+keyInput.value = localStorage.getItem('voiceApiKey') || '';
+keyInput.addEventListener('change', () => localStorage.setItem('voiceApiKey', keyInput.value.trim()));
+const key = () => keyInput.value.trim();
+
+$('tabStt').onclick = () => { $('tabStt').classList.add('active'); $('tabTts').classList.remove('active'); $('panelStt').style.display = ''; $('panelTts').style.display = 'none'; };
+$('tabTts').onclick = () => { $('tabTts').classList.add('active'); $('tabStt').classList.remove('active'); $('panelTts').style.display = ''; $('panelStt').style.display = 'none'; };
+
+// ---- Recording ----
+let mediaRecorder = null, chunks = [], recordedBlob = null;
+$('recBtn').onclick = async () => {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    chunks = []; recordedBlob = null;
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e => chunks.push(e.data);
+    mediaRecorder.onstop = () => {
+      recordedBlob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+      stream.getTracks().forEach(t => t.stop());
+      $('recBtn').textContent = '● Start recording';
+      $('recBtn').classList.remove('rec');
+      $('recStatus').textContent = 'Recording ready — press Transcribe.';
+    };
+    mediaRecorder.start();
+    $('recBtn').textContent = '■ Stop recording';
+    $('recBtn').classList.add('rec');
+    $('recStatus').textContent = 'Recording…';
+  } catch (e) {
+    $('recStatus').textContent = 'Microphone not available: ' + e.message;
+  }
+};
+
+// ---- STT ----
+$('transcribeBtn').onclick = async () => {
+  const file = $('fileInput').files[0];
+  const blob = file || recordedBlob;
+  if (!blob) { $('sttStatus').textContent = 'Record something or choose a file first.'; return; }
+  if (!key()) { $('sttStatus').textContent = 'Enter the API key first.'; return; }
+  const btn = $('transcribeBtn'); btn.disabled = true;
+  $('sttStatus').textContent = 'Transcribing… (first run after idle can take a minute or two)';
+  try {
+    const fd = new FormData();
+    fd.append('file', blob, file ? file.name : 'recording.webm');
+    fd.append('model', 'Systran/faster-whisper-large-v3');
+    const lang = $('lang').value;
+    if (lang) fd.append('language', lang);
+    const r = await fetch('/api/v1/audio/transcriptions', { method: 'POST', headers: { 'Authorization': 'Bearer ' + key() }, body: fd });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+    $('sttResult').textContent = data.text || '(no text returned)';
+    $('sttStatus').textContent = 'Done.';
+  } catch (e) {
+    $('sttStatus').textContent = 'Error: ' + e.message;
+  } finally { btn.disabled = false; }
+};
+$('copyBtn').onclick = () => navigator.clipboard.writeText($('sttResult').textContent);
+
+// ---- TTS ----
+$('speakBtn').onclick = async () => {
+  const text = $('ttsText').value.trim();
+  if (!text) { $('ttsStatus').textContent = 'Type some text first.'; return; }
+  if (!key()) { $('ttsStatus').textContent = 'Enter the API key first.'; return; }
+  const btn = $('speakBtn'); btn.disabled = true;
+  $('ttsStatus').textContent = 'Generating speech…';
+  try {
+    const r = await fetch('/api/v1/audio/speech', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + key(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'speaches-ai/Kokoro-82M-v1.0-ONNX', input: text, voice: $('voice').value, response_format: 'mp3' })
+    });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || ('HTTP ' + r.status)); }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const p = $('player'); p.src = url; p.style.display = ''; p.play();
+    const dl = $('dlLink'); dl.href = url; dl.style.display = '';
+    $('ttsStatus').textContent = 'Done.';
+  } catch (e) {
+    $('ttsStatus').textContent = 'Error: ' + e.message;
+  } finally { btn.disabled = false; }
+};
+</script>
+</body>
+</html>
