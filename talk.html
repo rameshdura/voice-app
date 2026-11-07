@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hold to Talk — Voice Studio</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, "Hiragino Sans", sans-serif; background: #0e1116; color: #e8ecf1; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 28px 18px 60px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  .sub { color: #9aa7b4; margin: 0 0 22px; font-size: 14px; }
+  .sub a { color: #f5c518; }
+  .keybar { display: flex; gap: 8px; margin-bottom: 20px; }
+  .keybar input { flex: 1; }
+  input, select { width: 100%; background: #171c24; border: 1px solid #2a323f; color: #e8ecf1; border-radius: 10px; padding: 11px 12px; font-size: 15px; }
+  .card { background: #141922; border: 1px solid #232b38; border-radius: 14px; padding: 18px; text-align: center; }
+  label { display: block; font-size: 13px; color: #9aa7b4; margin: 0 0 6px; text-align: left; }
+  #holdBtn {
+    width: 220px; height: 220px; border-radius: 50%; margin: 26px auto 10px;
+    background: #f5c518; color: #111; border: 0; font-size: 21px; font-weight: 800;
+    cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    transition: transform .08s ease, background .15s ease;
+  }
+  #holdBtn .mic { font-size: 52px; line-height: 1; }
+  #holdBtn .timer { font-size: 15px; font-weight: 600; min-height: 20px; }
+  #holdBtn:active { transform: scale(.97); }
+  #holdBtn.recording { background: #c0392b; color: #fff; animation: pulse 1.1s ease-in-out infinite; }
+  #holdBtn.busy { background: #2a323f; color: #9aa7b4; cursor: wait; animation: none; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(192,57,43,.55); } 50% { box-shadow: 0 0 0 22px rgba(192,57,43,0); } }
+  .status { color: #9aa7b4; font-size: 14px; min-height: 20px; margin-top: 12px; }
+  .result { white-space: pre-wrap; text-align: left; background: #0e1116; border: 1px solid #232b38; border-radius: 10px; padding: 14px; min-height: 64px; font-size: 17px; line-height: 1.6; margin-top: 16px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+  button.ghost { background: #1d242f; color: #e8ecf1; border: 1px solid #2a323f; border-radius: 10px; padding: 12px 16px; font-size: 15px; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: wait; }
+  .hint { font-size: 12px; color: #6b7787; margin-top: 10px; }
+  .history { text-align: left; margin-top: 22px; }
+  .history h2 { font-size: 15px; margin: 0 0 8px; color: #9aa7b4; }
+  .hitem { background: #0e1116; border: 1px solid #232b38; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; cursor: pointer; }
+  .hitem .when { display: block; color: #6b7787; font-size: 12px; margin-bottom: 2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎙️ Hold to Talk</h1>
+  <p class="sub">Press and hold the button, speak, then release — your transcription appears automatically. <a href="index.html">← Back to Voice Studio</a></p>
+
+  <div class="keybar">
+    <input id="apiKey" type="password" placeholder="API key (saved only in this browser)">
+  </div>
+
+  <div class="card">
+    <label>Language</label>
+    <select id="lang">
+      <option value="">Auto-detect</option>
+      <option value="ja">Japanese</option>
+      <option value="en">English</option>
+      <option value="ne">Nepali</option>
+    </select>
+
+    <button id="holdBtn" aria-label="Hold to talk">
+      <span class="mic">🎙️</span>
+      <span id="holdLabel">Hold to talk</span>
+      <span class="timer" id="timer"></span>
+    </button>
+    <p class="status" id="status">Hold the button (or hold Space) and start speaking.</p>
+
+    <div class="result" id="result">Your transcription will appear here.</div>
+    <div class="row">
+      <button class="ghost" id="copyBtn">Copy text</button>
+      <button class="ghost" id="clearBtn">Clear</button>
+    </div>
+    <p class="hint">Tip: keep clips short — the web proxy has a time limit, and the first transcription after the server has been idle takes longer while the model loads.</p>
+
+    <div class="history" id="historyWrap" style="display:none">
+      <h2>History (tap an item to copy it)</h2>
+      <div id="history"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const keyInput = $('apiKey');
+keyInput.value = localStorage.getItem('voiceApiKey') || '';
+keyInput.addEventListener('change', () => localStorage.setItem('voiceApiKey', keyInput.value.trim()));
+const key = () => keyInput.value.trim();
+
+const btn = $('holdBtn');
+let mediaRecorder = null, chunks = [], stream = null;
+let startedAt = 0, timerInt = null, recording = false, busy = false;
+
+function setTimer() {
+  const s = Math.floor((Date.now() - startedAt) / 1000);
+  $('timer').textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+
+async function startRecording() {
+  if (recording || busy) return;
+  if (!window.MediaRecorder || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    $('status').textContent = 'Recording is not supported in this browser. Try Chrome, Edge, or a recent Safari.';
+    return;
+  }
+  if (!key()) { $('status').textContent = 'Enter the API key first.'; return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    $('status').textContent = 'Microphone not available: ' + e.message;
+    return;
+  }
+  // The user may have released while the permission prompt was open.
+  if (!pressing) { stream.getTracks().forEach(t => t.stop()); stream = null; return; }
+  chunks = [];
+  try {
+    mediaRecorder = new MediaRecorder(stream);
+  } catch (e) {
+    mediaRecorder = new MediaRecorder(stream, {});
+  }
+  mediaRecorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  mediaRecorder.onstop = onStopped;
+  mediaRecorder.start();
+  recording = true;
+  startedAt = Date.now();
+  setTimer();
+  timerInt = setInterval(setTimer, 250);
+  btn.classList.add('recording');
+  $('holdLabel').textContent = 'Listening…';
+  $('status').textContent = 'Recording… release to transcribe.';
+}
+
+function stopRecording() {
+  if (!recording || !mediaRecorder) return;
+  recording = false;
+  clearInterval(timerInt);
+  try { mediaRecorder.stop(); } catch (e) { cleanupStream(); }
+}
+
+function cleanupStream() {
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+}
+
+async function onStopped() {
+  const duration = Date.now() - startedAt;
+  const type = (mediaRecorder && mediaRecorder.mimeType) || 'audio/webm';
+  const blob = new Blob(chunks, { type });
+  cleanupStream();
+  btn.classList.remove('recording');
+  $('timer').textContent = '';
+  if (duration < 400 || !blob.size) {
+    $('holdLabel').textContent = 'Hold to talk';
+    $('status').textContent = 'That was too short — hold the button while you speak, then release.';
+    return;
+  }
+  await transcribe(blob);
+}
+
+async function transcribe(blob) {
+  busy = true;
+  btn.classList.add('busy');
+  $('holdLabel').textContent = 'Transcribing…';
+  $('status').textContent = 'Transcribing… (first run after idle can take a minute or two)';
+  try {
+    const fd = new FormData();
+    fd.append('file', blob, 'recording.webm');
+    fd.append('model', 'Systran/faster-whisper-large-v3');
+    const lang = $('lang').value;
+    if (lang) fd.append('language', lang);
+    const r = await fetch('/api/v1/audio/transcriptions', { method: 'POST', headers: { 'Authorization': 'Bearer ' + key() }, body: fd });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+    const text = (data.text || '').trim() || '(no text returned)';
+    $('result').textContent = text;
+    $('status').textContent = 'Done. Hold the button to talk again.';
+    addHistory(text);
+  } catch (e) {
+    $('status').textContent = 'Error: ' + e.message;
+  } finally {
+    busy = false;
+    btn.classList.remove('busy');
+    $('holdLabel').textContent = 'Hold to talk';
+  }
+}
+
+function addHistory(text) {
+  const wrap = $('historyWrap'); wrap.style.display = '';
+  const item = document.createElement('div');
+  item.className = 'hitem';
+  const when = document.createElement('span');
+  when.className = 'when';
+  when.textContent = new Date().toLocaleTimeString() + ($('lang').value ? ' · ' + $('lang').selectedOptions[0].textContent : ' · Auto-detect');
+  item.appendChild(when);
+  item.appendChild(document.createTextNode(text));
+  item.onclick = () => navigator.clipboard.writeText(text);
+  const hist = $('history');
+  hist.insertBefore(item, hist.firstChild);
+  while (hist.children.length > 20) hist.removeChild(hist.lastChild);
+}
+
+// ---- Press-and-hold handling ----
+let pressing = false;
+function pressStart(e) {
+  if (e) e.preventDefault();
+  if (pressing) return;
+  pressing = true;
+  startRecording();
+}
+function pressEnd(e) {
+  if (e) e.preventDefault();
+  if (!pressing) return;
+  pressing = false;
+  stopRecording();
+}
+btn.addEventListener('pointerdown', e => { try { btn.setPointerCapture(e.pointerId); } catch (err) {} pressStart(e); });
+btn.addEventListener('pointerup', pressEnd);
+btn.addEventListener('pointercancel', pressEnd);
+btn.addEventListener('contextmenu', e => e.preventDefault());
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' && !e.repeat && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { pressStart(e); }
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'Space' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) { pressEnd(e); }
+});
+window.addEventListener('blur', () => { if (pressing) { pressing = false; stopRecording(); } });
+
+$('copyBtn').onclick = () => navigator.clipboard.writeText($('result').textContent);
+$('clearBtn').onclick = () => { $('result').textContent = 'Your transcription will appear here.'; $('status').textContent = 'Hold the button (or hold Space) and start speaking.'; };
+</script>
+</body>
+</html>
